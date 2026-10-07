@@ -1,0 +1,8 @@
+node_modules/
+.sites-runtime/
+.openai/
+*.csv
+*.xlsx
+*.tar.gz
+.env
+.env.*
