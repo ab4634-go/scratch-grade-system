@@ -10,6 +10,23 @@ function setup() {
   SpreadsheetApp.openById(SPREADSHEET_ID).setSpreadsheetTimeZone('Asia/Taipei');
   console.log('請將以下評分通行碼輸入評分系統的 Google 試算表連線設定，並僅分享給評分者：\n'+code);
 }
+function savePeerRecord(r) {
+  if (!/^[a-zA-Z0-9-]{10,100}$/.test(r.id||'') || !GROUPS.includes(r.group)) throw new Error('紀錄或組別無效');
+  ['judge','entry','title'].forEach(k=>{if(typeof r[k]!=='string'||!r[k].trim()||r[k].length>150)throw new Error('作品資料不完整');});
+  if(!Array.isArray(r.criteria)||r.criteria.length!==10||!r.criteria.every(n=>typeof n==='string'&&n.length>0&&n.length<=80))throw new Error('項目無效');
+  if(!Array.isArray(r.scores)||r.scores.length!==10||!r.scores.every(n=>[0,2,5,8,10].includes(n)))throw new Error('分數無效');
+  if(!Array.isArray(r.weights)||r.weights.length!==10||!r.weights.every(n=>n===10))throw new Error('配分無效');
+  const time=new Date(r.time);if(!Number.isFinite(time.getTime()))throw new Error('時間無效');
+  if(typeof r.feedback!=='string'||r.feedback.length>3000||typeof r.url!=='string'||r.url.length>2000||(r.url&&!/^https?:\/\//i.test(r.url)))throw new Error('回饋或連結無效');
+  const lock=LockService.getScriptLock();lock.waitLock(20000);
+  try {
+    const book=SpreadsheetApp.openById(SPREADSHEET_ID);let sh=book.getSheetByName('學生互評');
+    if(!sh){sh=book.insertSheet('學生互評');sh.appendRow(['紀錄ID','組別','作品編號／隊伍','作品名稱','評分者',...Array.from({length:10},(_,i)=>['項目'+(i+1),'分數'+(i+1)]).flat(),'總分','互評回饋','作品連結','評分時間（台北）','接收時間（台北）']);sh.setFrozenRows(1);}
+    const duplicate=sh.getLastRow()>1&&sh.getRange(2,1,sh.getLastRow()-1,1).createTextFinder(r.id).matchEntireCell(true).findNext();
+    if(!duplicate){const text=s=>/^\s*[=+@-]/.test(String(s))?"'"+s:String(s);const row=sh.getLastRow()+1;sh.getRange(row,1,1,30).setValues([[r.id,r.group,text(r.entry),text(r.title),text(r.judge),...r.criteria.flatMap((n,i)=>[text(n),r.scores[i]]),r.scores.reduce((a,b)=>a+b,0),text(r.feedback),text(r.url),time,new Date()]]);sh.getRange(row,29,1,2).setNumberFormat('yyyy-mm-dd hh:mm:ss');SpreadsheetApp.flush();}
+    return {ok:true,id:r.id,message:duplicate?'此筆成績已存在':'成績已寫入學生互評工作表'};
+  }finally{lock.releaseLock();}
+}
 function doGet() { return HtmlService.createHtmlOutput('Scratch 成績接收程式已部署。請由評分系統送出成績。'); }
 function doPost(e) {
   let p = {}, result;
@@ -20,6 +37,8 @@ function doPost(e) {
     const code=PropertiesService.getScriptProperties().getProperty('SCORING_ACCESS_CODE');
     if (!code || p.code !== code) throw new Error('評分通行碼錯誤，請重新設定');
     if (!/^[a-zA-Z0-9-]{10,100}$/.test(p.requestId||'')) throw new Error('請求格式錯誤');
+    if (p.action==='score' && p.record && p.record.rubricVersion==='peer-v1') result=savePeerRecord(p.record);
+    else {
     const sh=SpreadsheetApp.openById(SPREADSHEET_ID).getSheetByName(TAB);
     if (!sh || sh.getRange('A1').getValue()!=='紀錄ID') throw new Error('成績表欄位已變更');
     if (p.action==='check') result={ok:true,message:'已確認成績試算表連線'};
@@ -43,8 +62,10 @@ function doPost(e) {
         result={ok:true,id:r.id,message:duplicate?'此筆成績已存在':'成績已寫入 Google 試算表'};
       } finally {lock.releaseLock();}
     }
+    }
   } catch(err) { result={ok:false,message:err.message}; }
   const response=JSON.stringify({type:'scratch-sheet-result',requestId:p.requestId,...result}).replace(/</g,'\\u003c');
   const origin=ALLOWED_ORIGINS.includes(p.origin)?p.origin:ALLOWED_ORIGINS[0];
   return HtmlService.createHtmlOutput('<script>window.top.postMessage('+response+','+JSON.stringify(origin)+');</script>').setXFrameOptionsMode(HtmlService.XFrameOptionsMode.ALLOWALL);
 }
+
